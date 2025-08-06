@@ -121,7 +121,7 @@ A full technical breakdown of each contract (purpose, access, events, rules) is 
 
 ---
 
-## 🔍 Etherscan Verification (Optional)
+## 🔍 Etherscan Verification
 
 If enabled:
 
