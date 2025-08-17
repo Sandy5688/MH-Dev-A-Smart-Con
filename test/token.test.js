@@ -1,7 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
-describe(" Token Module", function () {
+describe(" TokenModule", function () {
   let deployer, user1, user2, multisig;
   let token, treasury, staking;
 
@@ -53,9 +53,12 @@ describe(" Token Module", function () {
   });
 
   describe(" TreasuryVault.sol", function () {
-    it("should deposit tokens to treasury", async () => {
+    it("should deposit tokens to treasury and emit event", async () => {
       await token.connect(user1).approve(treasury.target, ethers.parseEther("1000"));
-      await treasury.connect(user1).deposit(token.target, ethers.parseEther("1000"));
+      await expect(treasury.connect(user1).deposit(token.target, ethers.parseEther("1000")))
+        .to.emit(treasury, "DepositReceived")
+        .withArgs(token.target, user1.address, ethers.parseEther("1000"));
+
       const balance = await token.balanceOf(treasury.target);
       expect(balance).to.equal(ethers.parseEther("1000"));
     });
@@ -64,13 +67,50 @@ describe(" Token Module", function () {
       await token.connect(user1).approve(treasury.target, ethers.parseEther("1000"));
       await treasury.connect(user1).deposit(token.target, ethers.parseEther("1000"));
 
+      // Non-admin withdraw fails
       await expect(
         treasury.connect(user2).withdraw(token.target, user2.address, ethers.parseEther("1000"))
       ).to.be.revertedWith("Vault: not authorized");
 
+      // Admin/multisig withdraw succeeds
       await expect(
         treasury.connect(multisig).withdraw(token.target, user2.address, ethers.parseEther("500"))
-      ).to.emit(token, "Transfer");
+      ).to.emit(treasury, "WithdrawalExecuted")
+        .withArgs(token.target, user2.address, ethers.parseEther("500"));
+
+      const balance = await token.balanceOf(treasury.target);
+      expect(balance).to.equal(ethers.parseEther("500"));
+    });
+
+    it("should revert if withdrawing to zero address", async () => {
+      await token.connect(user1).approve(treasury.target, ethers.parseEther("100"));
+      await treasury.connect(user1).deposit(token.target, ethers.parseEther("100"));
+
+      await expect(
+        treasury.connect(multisig).withdraw(token.target, ethers.ZeroAddress, ethers.parseEther("50"))
+      ).to.be.revertedWith("Vault: invalid recipient");
+    });
+
+    it("should allow recovery of stuck ERC20 tokens by admin", async () => {
+      // Simulate ERC20 accidentally sent to vault
+      await token.transfer(treasury.target, ethers.parseEther("10"));
+      await expect(treasury.connect(multisig).recoverERC20(token.target, user1.address, ethers.parseEther("10")))
+        .to.emit(treasury, "WithdrawalExecuted")
+        .withArgs(token.target, user1.address, ethers.parseEther("10"));
+
+      const balance = await token.balanceOf(user1.address);
+      expect(balance).to.equal(ethers.parseEther("1010"));
+    });
+
+    it("should allow recovery of ETH by admin", async () => {
+      await deployer.sendTransaction({ to: treasury.target, value: ethers.parseEther("1") });
+
+      const before = await ethers.provider.getBalance(user1.address);
+      const tx = await treasury.connect(multisig).recoverETH(user1.address, ethers.parseEther("1"));
+      const receipt = await tx.wait();
+      const after = await ethers.provider.getBalance(user1.address);
+
+      expect(after - before).to.equal(ethers.parseEther("1"));
     });
   });
 
