@@ -58,15 +58,19 @@ contract SecretJackpot is VRFConsumerBase, Ownable {
     }
 
     function fulfillRandomness(bytes32, uint256 randomness) internal override {
+        if (lastEligibleList.length == 0 || jackpotAmount == 0) return;
+
         uint256 winnerIndex = randomness % lastEligibleList.length;
         address winner = lastEligibleList[winnerIndex];
 
-        require(
-            IERC20(paymentToken).transfer(winner, jackpotAmount),
-            "Transfer failed"
-        );
+        uint256 contractBalance = IERC20(paymentToken).balanceOf(address(this));
+        uint256 payout = jackpotAmount > contractBalance ? contractBalance : jackpotAmount;
 
-        emit JackpotWon(winner, jackpotAmount);
+        require(payout > 0, "No funds for jackpot");
+
+        require(IERC20(paymentToken).transfer(winner, payout), "Transfer failed");
+
+        emit JackpotWon(winner, payout);
     }
 
     // ----------------------------
@@ -80,10 +84,12 @@ contract SecretJackpot is VRFConsumerBase, Ownable {
     }
 
     function setStakingContract(address _staking) external onlyOwner {
+        require(_staking != address(0), "Invalid staking contract");
         stakingContract = IStakingRewards(_staking);
     }
 
     function setToken(address _token) external onlyOwner {
+        require(_token != address(0), "Invalid token");
         paymentToken = _token;
     }
 
