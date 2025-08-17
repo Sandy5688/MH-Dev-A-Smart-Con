@@ -1,7 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
-describe("EscrowManager", () => {
+describe("EscrowModule", () => {
   let deployer, trusted, user1, treasury;
   let mfh, nft, escrow;
 
