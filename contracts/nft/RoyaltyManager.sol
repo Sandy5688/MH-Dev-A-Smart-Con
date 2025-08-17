@@ -5,8 +5,15 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
+interface IRoyaltyManager {
+    function setRoyalty(uint256 tokenId, address creator, uint256 percent) external;
+    function distributeRoyaltyFromContract(uint256 tokenId, uint256 salePrice) external returns (uint256);
+    function setPlatformCut(uint256 cutBps) external;
+    function setTreasury(address newTreasury) external;
+}
+
 /// @notice RoyaltyManager compatible with MarketplaceCore pull-from-contract flow.
-contract RoyaltyManager is Ownable {
+contract RoyaltyManager is Ownable, IRoyaltyManager {
     using SafeERC20 for IERC20;
 
     uint256 public platformCut = 200; // 2% of royalty amount
@@ -40,35 +47,34 @@ contract RoyaltyManager is Ownable {
         emit RoyaltySet(tokenId, creator, percent);
     }
 
-    /// @notice Called by marketplace to distribute royalty from funds already held in contract.
-    /// @dev Transfers from this contract's balance, not from buyer.
-    /// @return totalRoyalty amount taken from marketplace funds.
-    function distributeRoyaltyFromContract(uint256 tokenId, uint256 salePrice) external returns (uint256 totalRoyalty) {
+    /// @notice Distribute royalty from marketplace funds (pull-once from caller)
+    function distributeRoyaltyFromContract(uint256 tokenId, uint256 salePrice) external override returns (uint256 totalRoyalty) {
         Royalty memory r = royalties[tokenId];
         if (r.percent == 0 || r.creator == address(0)) {
-            return 0; // No royalty set, skip.
+            return 0; // Graceful skip if no royalty set
         }
 
         totalRoyalty = (salePrice * r.percent) / 10000;
         uint256 platformAmount = (totalRoyalty * platformCut) / 10000;
         uint256 creatorAmount = totalRoyalty - platformAmount;
 
-        // Transfer from marketplace's contract balance
-            // Pull funds from caller (marketplace/auction) and forward to recipients
+        // Pull funds once from marketplace/caller to each recipient
+        if (creatorAmount > 0) {
             paymentToken.safeTransferFrom(msg.sender, r.creator, creatorAmount);
-            if (platformAmount > 0) {
-                paymentToken.safeTransferFrom(msg.sender, platformTreasury, platformAmount);
-            }
+        }
+        if (platformAmount > 0) {
+            paymentToken.safeTransferFrom(msg.sender, platformTreasury, platformAmount);
+        }
 
         emit RoyaltyPaid(tokenId, r.creator, totalRoyalty, creatorAmount, platformAmount);
     }
 
-    function setPlatformCut(uint256 cutBps) external onlyOwner {
+    function setPlatformCut(uint256 cutBps) external override onlyOwner {
         require(cutBps <= 1000, "Max 10%");
         platformCut = cutBps;
     }
 
-    function setTreasury(address newTreasury) external onlyOwner {
+    function setTreasury(address newTreasury) external override onlyOwner {
         require(newTreasury != address(0), "Invalid treasury");
         platformTreasury = newTreasury;
     }
