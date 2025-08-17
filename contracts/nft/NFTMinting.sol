@@ -4,30 +4,35 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract NFTMinting is ERC721URIStorage, Ownable {
     using Counters for Counters.Counter;
+    using SafeERC20 for IERC20;
+
     Counters.Counter private _tokenIds;
 
-    address public paymentToken; // MFH token
-    uint256 public mintPrice = 10 * 10 ** 18;
+    IERC20 public paymentToken; // MFH token
+    uint256 public mintPrice = 10 * 10**18;
     uint256 public maxPerWallet = 5;
 
     mapping(address => uint256) public mintedBy;
 
     event NFTMinted(address indexed user, uint256 tokenId);
+    event FeesWithdrawn(address indexed to, uint256 amount);
 
     constructor(address _paymentToken) ERC721("MemeNFT", "MEME") {
-        paymentToken = _paymentToken;
+        require(_paymentToken != address(0), "Payment token cannot be zero");
+        paymentToken = IERC20(_paymentToken);
     }
 
     function mintNFT(string memory metadataURI) external {
         require(bytes(metadataURI).length > 0, "Invalid metadata URI");
         require(mintedBy[msg.sender] < maxPerWallet, "Mint limit exceeded");
 
-        // Collect MFH fee
-        IERC20(paymentToken).transferFrom(msg.sender, address(this), mintPrice);
+        // Collect MFH fee safely
+        paymentToken.safeTransferFrom(msg.sender, address(this), mintPrice);
 
         _tokenIds.increment();
         uint256 newId = _tokenIds.current();
@@ -48,7 +53,9 @@ contract NFTMinting is ERC721URIStorage, Ownable {
     }
 
     function withdrawFees(address to) external onlyOwner {
-        uint256 balance = IERC20(paymentToken).balanceOf(address(this));
-        require(IERC20(paymentToken).transfer(to, balance), "Withdraw failed");
+        require(to != address(0), "Invalid recipient");
+        uint256 balance = paymentToken.balanceOf(address(this));
+        paymentToken.safeTransfer(to, balance);
+        emit FeesWithdrawn(to, balance);
     }
 }
