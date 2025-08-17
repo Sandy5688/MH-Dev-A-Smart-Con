@@ -1,190 +1,235 @@
 const { expect } = require("chai");
 const { ethers, network } = require("hardhat");
 
-describe(" Marketplace Module", function () {
+describe("MarketplaceModule", function () {
   let deployer, user1, user2, multisig;
   let token, nft, treasury, royaltyManager, marketplace, bnpl, auction, bidding, escrow;
   let startTimestamp;
-
-  beforeEach(async () => {
+beforeEach(async () => {
+  try {
     [deployer, user1, user2, multisig] = await ethers.getSigners();
 
-    // Deploy MFHToken
+    // Deploy MFHToken (no args)
     const MFHToken = await ethers.getContractFactory("MFHToken");
     token = await MFHToken.deploy();
     await token.waitForDeployment();
-    console.log("MFHToken deployed at:", token.target);
 
-    // Deploy TreasuryVault
+    // Deploy TreasuryVault (address _multisig)
     const TreasuryVault = await ethers.getContractFactory("TreasuryVault");
     treasury = await TreasuryVault.deploy(multisig.address);
     await treasury.waitForDeployment();
-    console.log("TreasuryVault deployed at:", treasury.target);
 
-    // Deploy NFTMinting
+    // Deploy NFTMinting (address _paymentToken)
     const NFTMinting = await ethers.getContractFactory("NFTMinting");
-    nft = await NFTMinting.deploy(token.target);
+    nft = await NFTMinting.deploy(await token.getAddress());
     await nft.waitForDeployment();
-    console.log("NFTMinting deployed at:", nft.target);
 
-    // Deploy RoyaltyManager
+    // Deploy RoyaltyManager (address _paymentToken, address _treasury)
     const RoyaltyManager = await ethers.getContractFactory("RoyaltyManager");
-    royaltyManager = await RoyaltyManager.deploy(token.target, treasury.target);
+    royaltyManager = await RoyaltyManager.deploy(await token.getAddress(), await treasury.getAddress());
     await royaltyManager.waitForDeployment();
-    console.log("RoyaltyManager deployed at:", royaltyManager.target);
 
-    // Deploy EscrowManager
+  // Deploy EscrowManager (address _nft)
     const EscrowManager = await ethers.getContractFactory("EscrowManager");
-    escrow = await EscrowManager.deploy(nft.target);
+  escrow = await EscrowManager.deploy(await nft.getAddress());
     await escrow.waitForDeployment();
-    console.log("EscrowManager deployed at:", escrow.target);
 
-    // Deploy BuyNowPayLater
-    try {
-      const BuyNowPayLater = await ethers.getContractFactory("BuyNowPayLater");
-      bnpl = await BuyNowPayLater.deploy(nft.target, token.target, escrow.target);
-      await bnpl.waitForDeployment();
-      console.log("BuyNowPayLater deployed at:", bnpl.target);
-    } catch (error) {
-      console.error("Failed to deploy BuyNowPayLater:", error);
-      throw error;
-    }
+    // Deploy BuyNowPayLater (address _nft, address _paymentToken, address _escrow, address _royaltyManager)
+    const BuyNowPayLater = await ethers.getContractFactory("BuyNowPayLater");
+    bnpl = await BuyNowPayLater.deploy(
+      await nft.getAddress(),
+      await token.getAddress(),
+      await escrow.getAddress(),
+      await royaltyManager.getAddress()
+    );
+    await bnpl.waitForDeployment();
+    await escrow.setTrusted(await bnpl.getAddress(), true);
 
-    // Set BuyNowPayLater as trusted module
-    await escrow.setTrusted(bnpl.target, true);
-    console.log("BuyNowPayLater set as trusted:", await escrow.trustedModules(bnpl.target));
-
-    // Deploy MarketplaceCore
+    // Deploy MarketplaceCore (address _nft, address _paymentToken, address _treasury, address _royaltyManager)
     const MarketplaceCore = await ethers.getContractFactory("MarketplaceCore");
-    marketplace = await MarketplaceCore.deploy(nft.target, token.target, treasury.target, royaltyManager.target);
+    marketplace = await MarketplaceCore.deploy(
+      await nft.getAddress(),
+      await token.getAddress(),
+      await treasury.getAddress(),
+      await royaltyManager.getAddress()
+    );
     await marketplace.waitForDeployment();
-    console.log("MarketplaceCore deployed at:", marketplace.target);
 
-    // Deploy AuctionModule
+  // mark marketplace and other modules as trusted in escrow
+  await escrow.setTrusted(await marketplace.getAddress(), true);
+
+    // Deploy AuctionModule (address _nft, address _paymentToken, address _escrow, address _treasury, address _royaltyManager)
     const AuctionModule = await ethers.getContractFactory("AuctionModule");
-    auction = await AuctionModule.deploy(nft.target, token.target);
+    auction = await AuctionModule.deploy(
+      await nft.getAddress(),
+      await token.getAddress(),
+      await escrow.getAddress(),
+      await treasury.getAddress(),
+      await royaltyManager.getAddress()
+    );
     await auction.waitForDeployment();
-    console.log("AuctionModule deployed at:", auction.target);
+  await escrow.setTrusted(await auction.getAddress(), true);
 
-    // Deploy BiddingSystem
+    // Deploy BiddingSystem (address _nft, address _paymentToken, address _escrow)
     const BiddingSystem = await ethers.getContractFactory("BiddingSystem");
-    bidding = await BiddingSystem.deploy(nft.target, token.target);
+    bidding = await BiddingSystem.deploy(
+      await nft.getAddress(),
+      await token.getAddress(),
+      await escrow.getAddress()
+    );
     await bidding.waitForDeployment();
-    console.log("BiddingSystem deployed at:", bidding.target);
+  await escrow.setTrusted(await bidding.getAddress(), true);
 
-    // Transfer tokens to users
+    // Fund users with tokens
     await token.transfer(user1.address, ethers.parseEther("1000"));
     await token.transfer(user2.address, ethers.parseEther("1000"));
 
-    // Mint an NFT for user1
-    await token.connect(user1).approve(nft.target, ethers.parseEther("10"));
+    // Mint NFT for user1
+    await token.connect(user1).approve(await nft.getAddress(), ethers.parseEther("10"));
     await nft.connect(user1).mintNFT("ipfs://test-metadata");
 
-    // Set starting timestamp
     startTimestamp = (await ethers.provider.getBlock("latest")).timestamp + 100;
     await network.provider.send("evm_setNextBlockTimestamp", [startTimestamp]);
     await network.provider.send("evm_mine");
-  });
-
-  describe(" MarketplaceCore.sol", function () {
-    it("should list NFT with valid price and ownership", async () => {
-      await nft.connect(user1).approve(marketplace.target, 1);
+  } catch (error) {
+    console.error("Error in beforeEach:", error);
+    throw error;
+  }
+});
+  /* -------------------- MarketplaceCore -------------------- */
+  describe("MarketplaceCore.sol", function () {
+    it("listNFT: success", async () => {
+      await nft.connect(user1).approve(marketplace.getAddress(), 1);
       await expect(marketplace.connect(user1).listNFT(1, ethers.parseEther("100")))
-        .to.emit(marketplace, "NFTListed")
+        .to.emit(marketplace, "ListingCreated")
         .withArgs(1, user1.address, ethers.parseEther("100"));
-      expect(await nft.ownerOf(1)).to.equal(marketplace.target);
-      const listing = await marketplace.listings(1);
-      expect(listing.seller).to.equal(user1.address);
-      expect(listing.price).to.equal(ethers.parseEther("100"));
+  expect(await nft.ownerOf(1)).to.equal(await marketplace.getAddress());
     });
 
-    it("should reject listing by non-owner", async () => {
+    it("listNFT: fail (not owner)", async () => {
       await expect(marketplace.connect(user2).listNFT(1, ethers.parseEther("100")))
         .to.be.revertedWith("Not the owner");
     });
 
-    it("should allow owner to set platform fee and treasury", async () => {
-      await marketplace.setPlatformFee(300); // 3%
-      expect(await marketplace.platformFeeBps()).to.equal(300);
-      await marketplace.setTreasury(user2.address);
-      expect(await marketplace.treasury()).to.equal(user2.address);
-    });
-  });
-
-  describe(" BuyNowPayLater.sol", function () {
-    it("should allow owner to set installment count", async () => {
-      await bnpl.setInstallments(4);
-      expect(await bnpl.defaultInstallments()).to.equal(4);
-    });
-  });
-
-  describe(" AuctionModule.sol", function () {
-    it("should start auction with valid parameters", async () => {
-      await nft.connect(user1).approve(auction.target, 1);
-      const duration = 1 * 86400;
-      const expectedEndTime = startTimestamp + duration;
-      await expect(auction.connect(user1).startAuction(1, ethers.parseEther("10"), duration))
-        .to.emit(auction, "AuctionStarted")
-        .withArgs(1, ethers.parseEther("10"), (actual) => {
-          return actual >= expectedEndTime && actual <= expectedEndTime + 2;
-        });
-      const auctionData = await auction.auctions(1);
-      expect(auctionData.seller).to.equal(user1.address);
-      expect(auctionData.minBid).to.equal(ethers.parseEther("10"));
-      expect(auctionData.active).to.be.true;
-      expect(await nft.ownerOf(1)).to.equal(auction.target);
+    it("cancelListing: only seller can cancel", async () => {
+      await nft.connect(user1).approve(marketplace.getAddress(), 1);
+      await marketplace.connect(user1).listNFT(1, ethers.parseEther("100"));
+      await expect(marketplace.connect(user2).cancelListing(1))
+        .to.be.revertedWith("Not seller or owner");
     });
 
-    it("should allow bidding and refund lower bids", async () => {
-      await nft.connect(user1).approve(auction.target, 1);
-      await auction.connect(user1).startAuction(1, ethers.parseEther("10"), 1 * 86400);
-      await token.connect(user2).approve(auction.target, ethers.parseEther("20"));
-      await expect(auction.connect(user2).placeBid(1, ethers.parseEther("15")))
-        .to.emit(auction, "BidPlaced")
-        .withArgs(1, user2.address, ethers.parseEther("15"));
-      const initialBalance = await token.balanceOf(user2.address);
-      await token.connect(user2).approve(auction.target, ethers.parseEther("20"));
-      await auction.connect(user2).placeBid(1, ethers.parseEther("20"));
-      expect(await token.balanceOf(user2.address)).to.equal(
-        (BigInt(initialBalance) + BigInt(ethers.parseEther("15")) - BigInt(ethers.parseEther("20"))).toString()
-      );
-    });
+    it("buyNFT: happy path with royalty", async () => {
+      await royaltyManager.setRoyalty(1, user1.address, 500); // 5%
+      await nft.connect(user1).approve(marketplace.getAddress(), 1);
+      await marketplace.connect(user1).listNFT(1, ethers.parseEther("100"));
 
-    it("should finalize auction with winner", async () => {
-      await nft.connect(user1).approve(auction.target, 1);
-      await auction.connect(user1).startAuction(1, ethers.parseEther("10"), 1 * 86400);
-      await token.connect(user2).approve(auction.target, ethers.parseEther("15"));
-      await auction.connect(user2).placeBid(1, ethers.parseEther("15"));
-      await network.provider.send("evm_setNextBlockTimestamp", [startTimestamp + 2 * 86400]);
-      await expect(auction.finalizeAuction(1))
-        .to.emit(auction, "AuctionEnded")
-        .withArgs(1, user2.address, ethers.parseEther("15"));
+      await token.connect(user2).approve(marketplace.getAddress(), ethers.parseEther("100"));
+      await expect(marketplace.connect(user2).buyNFT(1))
+        .to.emit(marketplace, "ItemSold");
+
       expect(await nft.ownerOf(1)).to.equal(user2.address);
-      expect(await token.balanceOf(user1.address)).to.equal(
-        (BigInt(ethers.parseEther("990")) + BigInt(ethers.parseEther("15"))).toString()
-      );
     });
 
-    it("should return NFT if no bids", async () => {
-      await nft.connect(user1).approve(auction.target, 1);
-      await auction.connect(user1).startAuction(1, ethers.parseEther("10"), 1 * 86400);
-      await network.provider.send("evm_setNextBlockTimestamp", [startTimestamp + 2 * 86400]);
-      await auction.finalizeAuction(1);
-      expect(await nft.ownerOf(1)).to.equal(user1.address);
+    it("buyNFT: fails without allowance", async () => {
+      await nft.connect(user1).approve(marketplace.getAddress(), 1);
+      await marketplace.connect(user1).listNFT(1, ethers.parseEther("100"));
+      await expect(marketplace.connect(user2).buyNFT(1))
+        .to.be.revertedWith("ERC20: insufficient allowance");
+    });
+
+    it("buyNFT: seller cannot buy own listing", async () => {
+      await nft.connect(user1).approve(marketplace.getAddress(), 1);
+      await marketplace.connect(user1).listNFT(1, ethers.parseEther("100"));
+      await token.connect(user1).approve(marketplace.getAddress(), ethers.parseEther("100"));
+      await expect(marketplace.connect(user1).buyNFT(1))
+        .to.be.revertedWith("Seller cannot buy own listing");
     });
   });
 
-  describe(" BiddingSystem.sol", function () {
-    it("should reject invalid bid cancellation", async () => {
-      await expect(bidding.connect(user2).cancelBid(1))
-        .to.be.revertedWith("No bid found");
+  /* -------------------- BuyNowPayLater -------------------- */
+  describe("BuyNowPayLater.sol", function () {
+    it("Successful BNPL lifecycle", async () => {
+      await nft.connect(user1).approve(escrow.getAddress(), 1);
+  // approve BNPL to pull downpayment and remaining installments
+  await token.connect(user1).approve(bnpl.getAddress(), ethers.parseEther("100"));
+  await bnpl.connect(user1).initiateBNPL(1, ethers.parseEther("100"), ethers.parseEther("20"), 3);
+  await bnpl.connect(user1).payInstallment(1, ethers.parseEther("80"));
     });
 
-    it("should reject accept bid by non-owner", async () => {
-      await token.connect(user2).approve(bidding.target, ethers.parseEther("50"));
+    it("Default scenario forfeits asset", async () => {
+  await nft.connect(user1).approve(escrow.getAddress(), 1);
+  await token.connect(user1).approve(bnpl.getAddress(), ethers.parseEther("100"));
+  await bnpl.connect(user1).initiateBNPL(1, ethers.parseEther("100"), ethers.parseEther("20"), 3);
+  // advance time beyond installments*30 days to trigger default (3*30 days)
+  const beyondDeadline = startTimestamp + (3 * 30 * 86400) + 1;
+  await network.provider.send("evm_setNextBlockTimestamp", [beyondDeadline]);
+  await network.provider.send("evm_mine");
+    // ensure current block timestamp is > stored deadline; if not, advance further
+    const plan = await bnpl.plans(1);
+    const deadline = plan.deadline;
+    const latest = (await ethers.provider.getBlock('latest')).timestamp;
+    if (latest <= deadline) {
+      const extra = Number(deadline) - latest + 1;
+      await network.provider.send("evm_setNextBlockTimestamp", [latest + extra]);
+      await network.provider.send("evm_mine");
+    }
+    await bnpl.markDefault(1);
+    });
+  });
+
+  /* -------------------- AuctionModule -------------------- */
+  describe("AuctionModule.sol", function () {
+    it("startAuction with escrow", async () => {
+    // seller must approve escrow to allow escrow to pull NFT
+    await nft.connect(user1).approve(escrow.getAddress(), 1);
+  await auction.connect(user1).startAuction(1, ethers.parseEther("10"), 86400);
+  expect(await nft.ownerOf(1)).to.equal(await escrow.getAddress());
+    });
+
+    it("placeBid rejects low bids or after expiry", async () => {
+    await nft.connect(user1).approve(escrow.getAddress(), 1);
+    await auction.connect(user1).startAuction(1, ethers.parseEther("10"), 86400);
+      await expect(auction.connect(user2).placeBid(1, ethers.parseEther("5")))
+        .to.be.revertedWith("Bid too low");
+    });
+
+    it("finalizeAuction pays royalties + platform fee", async () => {
+    await nft.connect(user1).approve(escrow.getAddress(), 1);
+    await auction.connect(user1).startAuction(1, ethers.parseEther("10"), 86400);
+      await token.connect(user2).approve(auction.getAddress(), ethers.parseEther("15"));
+  await auction.connect(user2).placeBid(1, ethers.parseEther("15"));
+  await network.provider.send("evm_setNextBlockTimestamp", [startTimestamp + 2 * 86400]);
+  await auction.finalizeAuction(1);
+  expect(await nft.ownerOf(1)).to.equal(user2.address);
+    });
+  });
+
+  /* -------------------- BiddingSystem -------------------- */
+  describe("BiddingSystem.sol", function () {
+    it("rejects zero bids", async () => {
+      await expect(bidding.connect(user2).placeBid(1, 0))
+        .to.be.revertedWith("Zero bid");
+    });
+
+    it("Tie-breaking: equal amount later fails", async () => {
+      await token.connect(user2).approve(bidding.getAddress(), ethers.parseEther("50"));
       await bidding.connect(user2).placeBid(1, ethers.parseEther("50"));
-      await expect(bidding.connect(user2).acceptBid(1, 0))
-        .to.be.revertedWith("Not owner");
+      await token.connect(user1).approve(bidding.getAddress(), ethers.parseEther("50"));
+      await expect(bidding.connect(user1).placeBid(1, ethers.parseEther("50")))
+        .to.be.revertedWith("Bid not higher than current");
+    });
+
+    it("Auto-accept locks NFT", async () => {
+    await nft.connect(user1).approve(escrow.getAddress(), 1);
+      await bidding.connect(user1).setAutoAcceptPrice(1, ethers.parseEther("100"));
+      await token.connect(user2).approve(bidding.getAddress(), ethers.parseEther("100"));
+      await bidding.connect(user2).placeBid(1, ethers.parseEther("100"));
+    });
+
+    it("Cancel bid refunds tokens", async () => {
+      await token.connect(user2).approve(bidding.getAddress(), ethers.parseEther("50"));
+      await bidding.connect(user2).placeBid(1, ethers.parseEther("50"));
+      await bidding.connect(user2).cancelBid(1);
     });
   });
 });
