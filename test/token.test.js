@@ -9,7 +9,7 @@ describe(" TokenModule", function () {
     [deployer, user1, user2, multisig] = await ethers.getSigners();
 
     const MFHToken = await ethers.getContractFactory("MFHToken");
-    token = await MFHToken.deploy();
+    token = await MFHToken.deploy(ethers.ZeroAddress); // pass dummy forwarder for testing
     await token.waitForDeployment();
 
     const TreasuryVault = await ethers.getContractFactory("TreasuryVault");
@@ -31,24 +31,47 @@ describe(" TokenModule", function () {
       expect(balance).to.equal(ethers.parseEther("1000"));
     });
 
-    it("should burn tokens correctly", async () => {
-      await token.connect(user1).approve(deployer.address, ethers.parseEther("100"));
-      await token.burn(user1.address, ethers.parseEther("100"));
-      const newBalance = await token.balanceOf(user1.address);
-      expect(newBalance).to.equal(ethers.parseEther("900"));
+    it("should burn self and via allowance correctly", async () => {
+      // Self-burn
+      await token.connect(user1).burn(user1.address, ethers.parseEther("100"));
+      expect(await token.balanceOf(user1.address)).to.equal(ethers.parseEther("900"));
+
+      // Burn via allowance
+      await token.connect(user1).approve(user2.address, ethers.parseEther("50"));
+      await token.connect(user2).burn(user1.address, ethers.parseEther("50"));
+      expect(await token.balanceOf(user1.address)).to.equal(ethers.parseEther("850"));
+
+      // Burn arbitrary (should revert)
+      await expect(
+        token.connect(user2).burn(user2.address, ethers.parseEther("10"))
+      ).to.be.revertedWith("MFH: not allowed to burn");
     });
 
     it("should pause and unpause transfers", async () => {
       await token.pause();
       await expect(
-        token.connect(user1).transfer(user2.address, ethers.parseEther("0.0001"))
+        token.connect(user1).transfer(user2.address, ethers.parseEther("1"))
       ).to.be.revertedWith("Pausable: paused");
 
       await token.unpause();
 
       await expect(
-        token.connect(user1).transfer(user2.address, ethers.parseEther("0.0001"))
+        token.connect(user1).transfer(user2.address, ethers.parseEther("1"))
       ).to.emit(token, "Transfer");
+    });
+
+    it("should revert mint exceeding MAX_SUPPLY", async () => {
+      const maxSupply = await token.MAX_SUPPLY();
+      await expect(token.mint(user1.address, maxSupply)).to.be.revertedWith(
+        "MFH: max supply exceeded"
+      );
+    });
+
+    it("should support meta-transactions (_msgSender())", async () => {
+      // Direct call simulates meta-tx: _msgSender() == msg.sender
+      await token.connect(user1).burn(user1.address, ethers.parseEther("1"));
+      const bal = await token.balanceOf(user1.address);
+      expect(bal).to.equal(ethers.parseEther("999")); // 1000 - 1
     });
   });
 
@@ -141,28 +164,21 @@ describe(" TokenModule", function () {
     });
 
     it("pendingReward calculation respects rounding", async () => {
-      // Set a small reward rate (0.001 tokens per second = 3.6 tokens per hour)
       const rewardRate = ethers.parseEther("0.001");
       await staking.setRewardRate(rewardRate);
 
-      // Clear existing stake and restake to reset reward debt
       const stakedAmount = ethers.parseEther("100");
       await staking.connect(user1).unstake();
-      // Approve again after unstaking
       await token.connect(user1).approve(staking.target, stakedAmount);
       await staking.connect(user1).stake(stakedAmount);
 
-      // Verify stake was successful
       const stakeInfo = await staking.stakes(user1.address);
       expect(stakeInfo.amount).to.equal(stakedAmount);
-      
-      // Simulate 1 hour elapsed
+
       await ethers.provider.send("evm_increaseTime", [3600]);
       await ethers.provider.send("evm_mine");
 
       const pending = await staking.pendingReward(user1.address);
-      // For 100 tokens staked at 0.001 tokens/sec for 3600 seconds
-      // Expected reward = 100 * 0.001 * 3600 / 1e18 = 0.36 tokens
       const expected = (stakedAmount * rewardRate * BigInt(3600)) / ethers.parseEther("1");
       expect(pending).to.equal(expected);
     });
