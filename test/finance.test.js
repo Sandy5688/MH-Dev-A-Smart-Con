@@ -1,7 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
-describe("Finance Module", () => {
+describe("FinanceModule", () => {
   let deployer, borrower;
   let nft, loan, mfh, escrow;
   const loanAmount = ethers.parseEther("100");
@@ -31,44 +31,67 @@ describe("Finance Module", () => {
     await mfh.transfer(loan.target, ethers.parseEther("1000"));
 
     // Give borrower MFH to pay mint price
-    const mintPrice = await nft.mintPrice(); // dynamically get the mint price
+    const mintPrice = await nft.mintPrice();
     await mfh.transfer(borrower.address, mintPrice);
 
-    // Approve NFTMinting contract to spend borrower's MFH tokens
     await mfh.connect(borrower).approve(nft.target, mintPrice);
-
-    // Mint NFT to borrower
     await nft.connect(borrower).mintNFT("ipfs://collateral");
 
-    // Approve escrow to move borrower's NFT
     await nft.connect(borrower).approve(escrow.target, 1);
   });
 
   it("should request and repay loan, releasing NFT", async () => {
     await loan.connect(borrower).requestLoan(1, loanAmount);
-
-    // borrower receives loanAmount in MFH
     expect(await mfh.balanceOf(borrower.address)).to.equal(loanAmount);
 
-    // Approve repayment amount
     await mfh.connect(borrower).approve(loan.target, loanAmount);
 
-    // Repay full loan
-    await loan.connect(borrower).repayLoan(1, loanAmount);
+    await expect(loan.connect(borrower).repayLoan(1, loanAmount))
+      .to.emit(loan, "Repaid")
+      .withArgs(1, borrower.address, loanAmount);
 
     const owner = await nft.ownerOf(1);
     expect(owner).to.equal(borrower.address);
   });
 
-  it("should reject double loan on same NFT", async () => {
+  it("should track partial repayments correctly", async () => {
     await loan.connect(borrower).requestLoan(1, loanAmount);
-    // Updated expectation to match actual revert reason from contract flow
-    await expect(
-      loan.connect(borrower).requestLoan(1, loanAmount)
-    ).to.be.revertedWith("Loan: not token owner");
+
+    await mfh.connect(borrower).approve(loan.target, ethers.parseEther("50"));
+    await expect(loan.connect(borrower).repayLoan(1, ethers.parseEther("50")))
+      .to.emit(loan, "Repaid")
+      .withArgs(1, borrower.address, ethers.parseEther("50"));
+
+    let loanInfo = await loan.loans(1);
+    expect(loanInfo.paid).to.equal(ethers.parseEther("50"));
+    expect(loanInfo.active).to.equal(true);
+
+    // Repay remaining
+    await mfh.connect(borrower).approve(loan.target, ethers.parseEther("50"));
+    await loan.connect(borrower).repayLoan(1, ethers.parseEther("50"));
+
+    loanInfo = await loan.loans(1);
+    expect(loanInfo.paid).to.equal(ethers.parseEther("100"));
+    expect(loanInfo.active).to.equal(false);
+
+    const nftOwner = await nft.ownerOf(1);
+    expect(nftOwner).to.equal(borrower.address);
   });
 
-  it("should not repay if insufficient funds", async () => {
+  it("should prevent early withdrawal of collateral", async () => {
+    await loan.connect(borrower).requestLoan(1, loanAmount);
+
+    await expect(loan.connect(borrower).withdrawCollateral(1, borrower.address))
+      .to.be.revertedWith("Loan: cannot withdraw before full repayment");
+  });
+
+  it("should reject double loan on same NFT", async () => {
+    await loan.connect(borrower).requestLoan(1, loanAmount);
+    await expect(loan.connect(borrower).requestLoan(1, loanAmount))
+      .to.be.revertedWith("Loan: not token owner");
+  });
+
+  it("should prevent repayment without sufficient approved funds", async () => {
     await loan.connect(borrower).requestLoan(1, loanAmount);
     await expect(loan.connect(borrower).repayLoan(1, loanAmount)).to.be.reverted;
   });
@@ -81,11 +104,13 @@ describe("Finance Module", () => {
   it("should liquidate loan after deadline", async () => {
     await loan.connect(borrower).requestLoan(1, loanAmount);
 
-    // move time forward beyond deadline
+    // Move time forward beyond deadline
     await ethers.provider.send("evm_increaseTime", [31 * 24 * 60 * 60]); // +31 days
     await ethers.provider.send("evm_mine");
 
-    await loan.connect(deployer).liquidateLoan(1);
+    await expect(loan.connect(deployer).liquidateLoan(1))
+      .to.emit(loan, "Liquidated")
+      .withArgs(1, deployer.address);
 
     const owner = await nft.ownerOf(1);
     expect(owner).to.equal(deployer.address);
