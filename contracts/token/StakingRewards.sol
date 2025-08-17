@@ -41,11 +41,14 @@ contract StakingRewards is Ownable {
         require(amount > 0, "Stake: zero amount");
         token.transferFrom(msg.sender, address(this), amount);
 
+        // Handle any pending rewards before updating stake
         _claimReward(msg.sender);
 
+        // Update stake info
         stakes[msg.sender].amount += amount;
         stakes[msg.sender].lastStaked = block.timestamp;
-        stakers.add(msg.sender); // Add to active set
+        stakes[msg.sender].rewardDebt = block.timestamp; // Reset reward debt to current time
+        stakers.add(msg.sender);
 
         totalStaked += amount;
         emit Staked(msg.sender, amount);
@@ -57,21 +60,23 @@ contract StakingRewards is Ownable {
 
         uint256 stakedAmount = user.amount;
         uint256 reward = pendingReward(msg.sender);
-        uint256 withdrawAmount = stakedAmount;
 
         if (block.timestamp < user.lastStaked + 7 days) {
             uint256 penalty = (reward * penaltyPercent) / 100;
             reward -= penalty;
         }
 
+        // Update state before transfers to prevent reentrancy
+        totalStaked -= stakedAmount;
         user.amount = 0;
         user.rewardDebt = 0;
-        stakers.remove(msg.sender); //  Remove from active set
+        stakers.remove(msg.sender);
 
-        totalStaked -= stakedAmount;
-
-        token.transfer(msg.sender, withdrawAmount);
-        token.transfer(msg.sender, reward);
+        // Return staked tokens and reward separately to ensure we have enough balance for each
+        token.transfer(msg.sender, stakedAmount);
+        if (reward > 0) {
+            token.transfer(msg.sender, reward);
+        }
 
         emit Unstaked(msg.sender, stakedAmount, reward);
     }
@@ -94,6 +99,7 @@ contract StakingRewards is Ownable {
         if (s.amount == 0) return 0;
 
         uint256 timeElapsed = block.timestamp - s.rewardDebt;
+        // reward calculation with 1e18 scaling to reduce rounding errors
         return (s.amount * rewardRatePerSecond * timeElapsed) / 1e18;
     }
 
@@ -108,11 +114,26 @@ contract StakingRewards is Ownable {
     }
 
     function getEligibleAddresses() external view returns (address[] memory) {
-        uint256 length = stakers.length();
-        address[] memory result = new address[](length);
-        for (uint256 i = 0; i < length; i++) {
-            result[i] = stakers.at(i);
+        uint256 count = 0;
+        for (uint i = 0; i < stakers.length(); i++) {
+            if (stakes[stakers.at(i)].amount > 0) {
+                count++;
+            }
         }
-        return result;
+
+        address[] memory eligible = new address[](count);
+        uint256 idx = 0;
+        for (uint i = 0; i < stakers.length(); i++) {
+            if (stakes[stakers.at(i)].amount > 0) {
+                eligible[idx] = stakers.at(i);
+                idx++;
+            }
+        }
+        return eligible;
+    }
+
+    // Optional: view function to get user's staked amount
+    function totalStakedOf(address user) external view returns (uint256) {
+        return stakes[user].amount;
     }
 }

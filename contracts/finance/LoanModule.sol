@@ -3,16 +3,20 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "./InstallmentLogic.sol";
 
 interface IEscrowManager {
-    function lockAsset(address nft, uint256 tokenId) external;
-    function releaseAsset(address nft, uint256 tokenId, address to) external;
-    function forfeitAsset(address nft, uint256 tokenId, address to) external;
+    function lockAsset(uint256 tokenId, address depositor) external;
+    function releaseAsset(uint256 tokenId, address to) external;
+    function forfeitAsset(uint256 tokenId, address to) external;
 }
 
-contract LoanModule is Ownable {
+contract LoanModule is Ownable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     IERC721 public nft;
     IERC20 public token;
     IEscrowManager public escrow;
@@ -32,11 +36,14 @@ contract LoanModule is Ownable {
     uint256 public loanDuration = 30 days;
     uint8 public maxInstallments = 4;
 
-    event LoanRequested(uint256 tokenId, address borrower, uint256 amount);
-    event Repaid(uint256 tokenId, address borrower, uint256 amount);
-    event Liquidated(uint256 tokenId, address liquidator);
+    event LoanRequested(uint256 indexed tokenId, address indexed borrower, uint256 amount);
+    event Repaid(uint256 indexed tokenId, address indexed borrower, uint256 amount);
+    event LateRepayment(uint256 indexed tokenId, address indexed borrower, uint256 amount, uint256 timestamp);
+    event Liquidated(uint256 indexed tokenId, address indexed liquidator);
+    event WithdrawalBlocked(uint256 indexed tokenId, address indexed borrower, uint256 timestamp);
 
     constructor(address _nft, address _token, address _escrow) {
+        require(_nft != address(0) && _token != address(0) && _escrow != address(0), "Invalid addresses");
         nft = IERC721(_nft);
         token = IERC20(_token);
         escrow = IEscrowManager(_escrow);
@@ -47,14 +54,31 @@ contract LoanModule is Ownable {
         token = IERC20(_token);
     }
 
-    function requestLoan(uint256 tokenId, uint256 amount) external {
-        require(nft.ownerOf(tokenId) == msg.sender, "Not token owner");
-        require(amount > 0, "Invalid amount");
-        require(!loans[tokenId].active, "Loan exists");
+    modifier onlyBorrower(uint256 tokenId) {
+        require(loans[tokenId].borrower == msg.sender, "Loan: not borrower");
+        _;
+    }
 
-        // Lock NFT into escrow
-        nft.transferFrom(msg.sender, address(escrow), tokenId);
-        escrow.lockAsset(address(nft), tokenId);
+    modifier onlyActiveLoan(uint256 tokenId) {
+        require(loans[tokenId].active, "Loan: no active loan");
+        _;
+    }
+
+    modifier canWithdraw(uint256 tokenId) {
+        Loan storage loan = loans[tokenId];
+        if (loan.paid < loan.amount) {
+            revert("Loan: cannot withdraw before full repayment");
+        }
+        _;
+    }
+
+    function requestLoan(uint256 tokenId, uint256 amount) external nonReentrant {
+        require(nft.ownerOf(tokenId) == msg.sender, "Loan: not token owner");
+        require(amount > 0, "Loan: invalid amount");
+        require(!loans[tokenId].active, "Loan: loan exists");
+
+        // Lock NFT collateral in escrow
+        escrow.lockAsset(tokenId, msg.sender);
 
         loans[tokenId] = Loan({
             borrower: msg.sender,
@@ -67,38 +91,58 @@ contract LoanModule is Ownable {
 
         installments[tokenId] = InstallmentLogic.createPlan(amount, maxInstallments);
 
-        // Send loan tokens to borrower
-        token.transfer(msg.sender, amount);
+        // Transfer loan amount to borrower
+        token.safeTransfer(msg.sender, amount);
 
         emit LoanRequested(tokenId, msg.sender, amount);
     }
 
-    function repayLoan(uint256 tokenId, uint256 amount) external {
+    function repayLoan(uint256 tokenId, uint256 amount) external onlyBorrower(tokenId) onlyActiveLoan(tokenId) nonReentrant {
+        require(amount > 0, "Loan: invalid amount");
+
         Loan storage loan = loans[tokenId];
-        require(loan.active, "No active loan");
-        require(msg.sender == loan.borrower, "Not borrower");
 
+        // Prevent overpayment
+        uint256 remaining = loan.amount - loan.paid;
+        if (amount > remaining) {
+            amount = remaining;
+        }
+
+        // Pull repayment tokens
+        token.safeTransferFrom(msg.sender, address(this), amount);
+
+        // Update installment plan
         InstallmentLogic.InstallmentPlan storage plan = installments[tokenId];
-        (uint256 remaining, bool isLate) = InstallmentLogic.payInstallment(plan, amount, block.timestamp);
-
+        (uint256 newRemaining, bool isLate) = InstallmentLogic.payInstallment(plan, amount, block.timestamp);
+        
         loan.paid += amount;
 
-        token.transferFrom(msg.sender, address(this), amount);
         emit Repaid(tokenId, msg.sender, amount);
 
-        if (remaining == 0) {
+        if (isLate) {
+            emit LateRepayment(tokenId, msg.sender, amount, block.timestamp);
+        }
+
+        // If fully repaid, release NFT
+        if (loan.paid >= loan.amount) {
             loan.active = false;
-            escrow.releaseAsset(address(nft), tokenId, loan.borrower);
+            escrow.releaseAsset(tokenId, loan.borrower);
         }
     }
 
-    function liquidateLoan(uint256 tokenId) external onlyOwner {
+    function withdrawCollateral(uint256 tokenId, address to) external onlyBorrower(tokenId) canWithdraw(tokenId) nonReentrant {
+        // Allow borrower to withdraw NFT only after full repayment
+        escrow.releaseAsset(tokenId, to);
+    }
+
+    function liquidateLoan(uint256 tokenId) external onlyOwner nonReentrant onlyActiveLoan(tokenId) {
         Loan storage loan = loans[tokenId];
-        require(loan.active, "Loan inactive");
-        require(block.timestamp > loan.deadline, "Loan not expired");
+        require(block.timestamp > loan.deadline, "Loan: not expired");
 
         loan.active = false;
-        escrow.forfeitAsset(address(nft), tokenId, owner());
+
+        // Forfeit NFT collateral to owner/treasury
+        escrow.forfeitAsset(tokenId, owner());
 
         emit Liquidated(tokenId, msg.sender);
     }

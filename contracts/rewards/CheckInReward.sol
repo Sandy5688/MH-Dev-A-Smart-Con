@@ -7,24 +7,33 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 contract CheckInReward is Ownable {
     IERC20 public token;
     uint256 public rewardAmount;
-    mapping(address => uint256) public lastCheckIn;
+
+    // Tracks the last day (UTC) a user checked in
+    mapping(address => uint256) public lastCheckInDay;
 
     event CheckedIn(address indexed user, uint256 reward);
 
     constructor(address _mfh, uint256 _rewardAmount) {
+        require(_mfh != address(0), "Invalid token");
         token = IERC20(_mfh);
         rewardAmount = _rewardAmount;
     }
 
     function checkIn() external {
-        require(block.timestamp - lastCheckIn[msg.sender] >= 1 days, "Already checked in today");
-        lastCheckIn[msg.sender] = block.timestamp;
+        uint256 currentDay = block.timestamp / 1 days;
+        require(lastCheckInDay[msg.sender] < currentDay, "Already checked in today");
+
+        lastCheckInDay[msg.sender] = currentDay;
 
         require(token.balanceOf(address(this)) >= rewardAmount, "Out of rewards");
-        token.transfer(msg.sender, rewardAmount);
+        require(token.transfer(msg.sender, rewardAmount), "Transfer failed");
 
         emit CheckedIn(msg.sender, rewardAmount);
     }
+
+    // ----------------------------
+    // Admin functions
+    // ----------------------------
 
     function setToken(address _token) external onlyOwner {
         require(_token != address(0), "Invalid token");

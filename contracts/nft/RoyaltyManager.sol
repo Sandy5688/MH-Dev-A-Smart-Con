@@ -3,13 +3,24 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-contract RoyaltyManager is Ownable {
-    uint256 public platformCut = 200; // 2% = 200 basis points
-    uint256 public constant MAX_ROYALTY = 1000; // 10%
+interface IRoyaltyManager {
+    function setRoyalty(uint256 tokenId, address creator, uint256 percent) external;
+    function distributeRoyaltyFromContract(uint256 tokenId, uint256 salePrice) external returns (uint256);
+    function setPlatformCut(uint256 cutBps) external;
+    function setTreasury(address newTreasury) external;
+}
+
+/// @notice RoyaltyManager compatible with MarketplaceCore pull-from-contract flow.
+contract RoyaltyManager is Ownable, IRoyaltyManager {
+    using SafeERC20 for IERC20;
+
+    uint256 public platformCut = 200; // 2% of royalty amount
+    uint256 public constant MAX_ROYALTY = 1000; // 10% max royalty
 
     address public platformTreasury;
-    address public paymentToken;
+    IERC20 public paymentToken;
 
     struct Royalty {
         uint256 percent; // out of 10,000 (basis points)
@@ -18,41 +29,53 @@ contract RoyaltyManager is Ownable {
 
     mapping(uint256 => Royalty) public royalties;
 
-    event RoyaltySet(uint256 tokenId, address creator, uint256 percent);
-    event RoyaltyPaid(uint256 tokenId, address to, uint256 amount, address buyer);
+    event RoyaltySet(uint256 indexed tokenId, address indexed creator, uint256 percent);
+    event RoyaltyPaid(uint256 indexed tokenId, address indexed creator, uint256 totalRoyalty, uint256 creatorAmount, uint256 platformAmount);
 
     constructor(address _paymentToken, address _treasury) {
-        paymentToken = _paymentToken;
+        require(_paymentToken != address(0), "Invalid payment token");
+        require(_treasury != address(0), "Invalid treasury");
+        paymentToken = IERC20(_paymentToken);
         platformTreasury = _treasury;
     }
 
+    /// @notice Set royalty info for a tokenId.
     function setRoyalty(uint256 tokenId, address creator, uint256 percent) external onlyOwner {
         require(percent <= MAX_ROYALTY, "Royalty too high");
+        require(creator != address(0), "Invalid creator");
         royalties[tokenId] = Royalty(percent, creator);
         emit RoyaltySet(tokenId, creator, percent);
     }
 
-    function distributeRoyalty(uint256 tokenId, uint256 salePrice, address buyer) external {
+    /// @notice Distribute royalty from marketplace funds (pull-once from caller)
+    function distributeRoyaltyFromContract(uint256 tokenId, uint256 salePrice) external override returns (uint256 totalRoyalty) {
         Royalty memory r = royalties[tokenId];
-        require(r.percent > 0, "No royalty set");
+        if (r.percent == 0 || r.creator == address(0)) {
+            return 0; // Graceful skip if no royalty set
+        }
 
-        uint256 royaltyAmount = (salePrice * r.percent) / 10000;
-        uint256 platformAmount = (royaltyAmount * platformCut) / 10000;
-        uint256 creatorAmount = royaltyAmount - platformAmount;
+        totalRoyalty = (salePrice * r.percent) / 10000;
+        uint256 platformAmount = (totalRoyalty * platformCut) / 10000;
+        uint256 creatorAmount = totalRoyalty - platformAmount;
 
-        // Pull funds from buyer (approved beforehand)
-        require(IERC20(paymentToken).transferFrom(buyer, r.creator, creatorAmount), "Creator royalty failed");
-        require(IERC20(paymentToken).transferFrom(buyer, platformTreasury, platformAmount), "Platform fee failed");
+        // Pull funds once from marketplace/caller to each recipient
+        if (creatorAmount > 0) {
+            paymentToken.safeTransferFrom(msg.sender, r.creator, creatorAmount);
+        }
+        if (platformAmount > 0) {
+            paymentToken.safeTransferFrom(msg.sender, platformTreasury, platformAmount);
+        }
 
-        emit RoyaltyPaid(tokenId, r.creator, royaltyAmount, buyer);
+        emit RoyaltyPaid(tokenId, r.creator, totalRoyalty, creatorAmount, platformAmount);
     }
 
-    function setPlatformCut(uint256 cutBps) external onlyOwner {
+    function setPlatformCut(uint256 cutBps) external override onlyOwner {
         require(cutBps <= 1000, "Max 10%");
         platformCut = cutBps;
     }
 
-    function setTreasury(address newTreasury) external onlyOwner {
+    function setTreasury(address newTreasury) external override onlyOwner {
+        require(newTreasury != address(0), "Invalid treasury");
         platformTreasury = newTreasury;
     }
 }
