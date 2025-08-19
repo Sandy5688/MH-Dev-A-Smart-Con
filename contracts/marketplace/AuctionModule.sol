@@ -179,6 +179,8 @@ contract AuctionModule is Ownable, ReentrancyGuard {
         // Distribute royalties from contract. royaltyPaid is moved out of contract by royaltyManager.
         uint256 royaltyPaid = 0;
         if (address(royaltyManager) != address(0)) {
+            // Approve royalty manager to pull royalties from this contract
+            paymentToken.approve(address(royaltyManager), finalPrice);
             royaltyPaid = royaltyManager.distributeRoyaltyFromContract(tokenId, finalPrice);
             require(royaltyPaid <= finalPrice, "Invalid royalty");
         }

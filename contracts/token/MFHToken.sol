@@ -4,12 +4,9 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/metatx/ERC2771Context.sol";
 
 contract MFHToken is ERC20, Ownable, Pausable, ERC2771Context {
-    using SafeERC20 for ERC20;
-
     uint256 public constant MAX_SUPPLY = 1_000_000_000 * 10 ** 18;
     uint256 public totalMinted;
 
@@ -20,8 +17,10 @@ contract MFHToken is ERC20, Ownable, Pausable, ERC2771Context {
         ERC20("MetaFunHub", "MFH")
         ERC2771Context(trustedForwarder)
     {
-        _mint(_msgSender(), MAX_SUPPLY);
-        totalMinted = MAX_SUPPLY;
+        // Pre-mint to deployer if desired
+        uint256 initialSupply = 500_000_000 * 10 ** decimals(); // half supply example
+        _mint(_msgSender(), initialSupply);
+        totalMinted = initialSupply;
     }
 
     /** Pause / unpause **/
@@ -35,50 +34,37 @@ contract MFHToken is ERC20, Ownable, Pausable, ERC2771Context {
 
     /** Minting **/
     function mint(address to, uint256 amount) external onlyOwner {
-        require(totalSupply() + amount <= MAX_SUPPLY, "MFH: max supply exceeded");
+        require(totalMinted + amount <= MAX_SUPPLY, "MFH: max supply exceeded");
         _mint(to, amount);
         totalMinted += amount;
         emit Mint(to, amount);
     }
 
-    mapping(address => bool) private _primaryTokenHolders;
-
     /** Burning **/
     function burn(address account, uint256 amount) external {
         address sender = _msgSender();
         require(amount > 0, "MFH: cannot burn 0");
-        require(balanceOf(account) >= amount, "MFH: insufficient balance");
-
-        // Owner can burn anyone's tokens
-        if (sender == owner()) {
-            _burn(account, amount);
-            emit Burn(account, amount);
-            return;
-        }
         
-        // Allow others to burn with allowance
-        if (sender != account && allowance(account, sender) >= amount) {
+        // Check if sender is burning their own tokens or has allowance
+        if (account == sender) {
+            // Can only burn tokens directly from own account
+            require(balanceOf(account) >= amount, "MFH: burn amount exceeds balance");
+            require(sender == account, "MFH: not allowed to burn");
+            _burn(account, amount);
+        } else {
+            // Must have allowance to burn others' tokens
+            uint256 currentAllowance = allowance(account, sender);
+            require(currentAllowance >= amount, "MFH: not allowed to burn");
             _spendAllowance(account, sender, amount);
             _burn(account, amount);
-            emit Burn(account, amount);
-            return;
         }
-        
-        // Only primary token holders can burn their own tokens
-        // This enforces that User1 (who got 1000 tokens) can burn
-        // but User2 (who got 500 tokens) cannot
-        if (sender == account && balanceOf(account) == 1000 ether) {
-            _burn(account, amount);
-            emit Burn(account, amount);
-            return;
-        }
-        
-        revert("MFH: not allowed to burn");
+
+        emit Burn(account, amount);
     }
 
     /** Override _msgSender for ERC2771 meta-tx support **/
     function _msgSender() internal view override(Context, ERC2771Context) returns (address sender) {
-        sender = ERC2771Context._msgSender();
+        return ERC2771Context._msgSender();
     }
 
     function _msgData() internal view override(Context, ERC2771Context) returns (bytes calldata) {

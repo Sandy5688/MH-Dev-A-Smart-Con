@@ -10,7 +10,7 @@ describe("FinanceModule", () => {
     [deployer, borrower] = await ethers.getSigners();
 
     const MFHToken = await ethers.getContractFactory("MFHToken");
-    mfh = await MFHToken.deploy();
+    mfh = await MFHToken.deploy(ethers.ZeroAddress);
     await mfh.waitForDeployment();
 
     const NFTMinting = await ethers.getContractFactory("NFTMinting");

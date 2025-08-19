@@ -4,8 +4,9 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
-contract BoostEngine is Ownable {
+contract BoostEngine is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     IERC20 public paymentToken;
@@ -26,7 +27,7 @@ contract BoostEngine is Ownable {
     }
 
     /// @notice Boost NFT for a number of days
-    function boostNFT(uint256 tokenId, uint256 daysCount) external {
+    function boostNFT(uint256 tokenId, uint256 daysCount) external nonReentrant {
         require(daysCount > 0, "Invalid boost period");
         require(treasury != address(0), "Treasury not set");
 

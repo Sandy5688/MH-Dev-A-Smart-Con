@@ -10,7 +10,7 @@ describe("EscrowModule", () => {
 
     // Deploy MFH token
     const MFHToken = await ethers.getContractFactory("MFHToken");
-    mfh = await MFHToken.deploy();
+    mfh = await MFHToken.deploy(ethers.ZeroAddress);
     await mfh.waitForDeployment();
 
     // Deploy NFTMinting (uses MFH for mint price)

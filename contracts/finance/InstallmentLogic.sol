@@ -13,19 +13,20 @@ library InstallmentLogic {
 
     function createPlan(uint256 totalAmount, uint8 count) internal view returns (InstallmentPlan memory) {
         require(count > 0, "Invalid count");
+        // Deadline is set to span the number of installments (30 days per installment)
         return InstallmentPlan({
             total: totalAmount,
             paid: 0,
             installments: count,
             createdAt: block.timestamp,
-            deadline: block.timestamp + 30 days
+            deadline: block.timestamp + (uint256(count) * 30 days)
         });
     }
 
     function payInstallment(InstallmentPlan storage plan, uint256 amount, uint256 nowTime)
         internal returns (uint256 remaining, bool isLate)
     {
-        require(nowTime <= plan.deadline, "Payment too late");
+        // Allow payments after deadline but mark them as late. Do not prevent payers from catching up.
         require(plan.paid + amount <= plan.total, "Overpayment");
 
         plan.paid += amount;

@@ -9,9 +9,9 @@ describe("NFTModule", function () {
   beforeEach(async () => {
     [deployer, user1, user2, multisig] = await ethers.getSigners();
 
-    // Deploy MFHToken
+    // Deploy MFHToken with zero address as trusted forwarder for testing
     const MFHToken = await ethers.getContractFactory("MFHToken");
-    token = await MFHToken.deploy();
+    token = await MFHToken.deploy(ethers.ZeroAddress);
     await token.waitForDeployment();
 
     // Deploy TreasuryVault

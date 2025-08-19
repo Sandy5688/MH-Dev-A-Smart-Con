@@ -68,23 +68,28 @@ contract BuyNowPayLater is Ownable {
         uint256 downPayment,
         uint8 installments
     ) external {
-        require(nft.ownerOf(tokenId) == msg.sender, "Not owner");
+        // Buyer initiates BNPL for an NFT listed by seller.
+        address seller = nft.ownerOf(tokenId);
+        require(seller != address(0), "Invalid token owner");
         require(totalPrice > 0 && downPayment > 0, "Invalid terms");
         require(installments > 0, "Invalid installment count");
         require(downPayment < totalPrice, "Downpayment must be less than price");
-
-    // Transfer NFT to escrow for custody: seller must approve escrow beforehand.
-    escrow.lockAsset(tokenId, msg.sender);
-
-        // Transfer downpayment to contract
+        // Pull downPayment from buyer into contract
         paymentToken.safeTransferFrom(msg.sender, address(this), downPayment);
 
-        // Pay royalties from downpayment if applicable
-        royaltyManager.distributeRoyaltyFromContract(tokenId, downPayment);
+        // Transfer NFT to escrow for custody: seller must approve escrow beforehand.
+        escrow.lockAsset(tokenId, seller);
+
+        // Let royaltyManager pull royalty from this contract balance (marketplace-like pattern)
+        if (address(royaltyManager) != address(0)) {
+            // approve royalty manager to pull from this contract
+            paymentToken.approve(address(royaltyManager), downPayment);
+            royaltyManager.distributeRoyaltyFromContract(tokenId, downPayment);
+        }
 
         plans[tokenId] = BNPL({
-            buyer: address(0), // Buyer will pay installments
-            seller: msg.sender,
+            buyer: msg.sender,
+            seller: seller,
             totalPrice: totalPrice,
             downPayment: downPayment,
             paid: downPayment,
@@ -92,7 +97,7 @@ contract BuyNowPayLater is Ownable {
             installments: installments
         });
 
-        emit BNPLStarted(tokenId, address(0), msg.sender, totalPrice, downPayment);
+        emit BNPLStarted(tokenId, msg.sender, seller, totalPrice, downPayment);
     }
 
     function payInstallment(uint256 tokenId, uint256 amount) external {

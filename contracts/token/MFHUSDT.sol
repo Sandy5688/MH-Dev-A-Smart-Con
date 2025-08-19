@@ -5,8 +5,11 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
 import "@openzeppelin/contracts/metatx/ERC2771Context.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-contract MFHUSDT is ERC20, Ownable, Pausable, ERC2771Context {
+contract MFHUSDT is ERC20, Ownable, Pausable, ERC2771Context, ReentrancyGuard {
+    using SafeERC20 for IERC20;
     uint8 private constant _decimals = 6;
     uint256 public constant MAX_SUPPLY = 1_000_000_000 * 10 ** _decimals;
     uint256 public totalMinted;
@@ -31,6 +34,9 @@ contract MFHUSDT is ERC20, Ownable, Pausable, ERC2771Context {
 
     function burn(address account, uint256 amount) external {
         require(_msgSender() == account || allowance(account, _msgSender()) >= amount, "MFHUSDT: not allowed");
+        if (_msgSender() != account) {
+            _spendAllowance(account, _msgSender(), amount);
+        }
         _burn(account, amount);
         emit Burn(account, amount);
     }

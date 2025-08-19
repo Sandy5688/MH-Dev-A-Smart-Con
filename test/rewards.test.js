@@ -9,9 +9,9 @@ describe(" RewardsModules", () => {
   beforeEach(async () => {
     [owner, user1, user2] = await ethers.getSigners();
 
-    // Deploy MFH token
+    // Deploy MFH token with zero address as trusted forwarder for testing
     const MFHToken = await ethers.getContractFactory("MFHToken");
-    token = await MFHToken.deploy();
+    token = await MFHToken.deploy(ethers.ZeroAddress);
     await token.waitForDeployment();
 
     // Fund owner with initial tokens for distribution

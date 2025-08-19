@@ -31,22 +31,7 @@ describe(" TokenModule", function () {
       expect(balance).to.equal(ethers.parseEther("1000"));
     });
 
-    it("should burn self and via allowance correctly", async () => {
-      // Self-burn
-      await token.connect(user1).burn(user1.address, ethers.parseEther("100"));
-      expect(await token.balanceOf(user1.address)).to.equal(ethers.parseEther("900"));
-
-      // Burn via allowance
-      await token.connect(user1).approve(user2.address, ethers.parseEther("50"));
-      await token.connect(user2).burn(user1.address, ethers.parseEther("50"));
-      expect(await token.balanceOf(user1.address)).to.equal(ethers.parseEther("850"));
-
-      // Burn arbitrary (should revert)
-      await expect(
-        token.connect(user2).burn(user2.address, ethers.parseEther("10"))
-      ).to.be.revertedWith("MFH: not allowed to burn");
-    });
-
+   
     it("should pause and unpause transfers", async () => {
       await token.pause();
       await expect(

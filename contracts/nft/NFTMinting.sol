@@ -6,8 +6,9 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
-contract NFTMinting is ERC721URIStorage, Ownable {
+contract NFTMinting is ERC721URIStorage, Ownable, ReentrancyGuard {
     using Counters for Counters.Counter;
     using SafeERC20 for IERC20;
 
@@ -32,7 +33,7 @@ contract NFTMinting is ERC721URIStorage, Ownable {
         require(mintedBy[msg.sender] < maxPerWallet, "Mint limit exceeded");
 
         // Collect MFH fee safely
-        paymentToken.safeTransferFrom(msg.sender, address(this), mintPrice);
+    paymentToken.safeTransferFrom(msg.sender, address(this), mintPrice);
 
         _tokenIds.increment();
         uint256 newId = _tokenIds.current();
@@ -55,7 +56,7 @@ contract NFTMinting is ERC721URIStorage, Ownable {
     function withdrawFees(address to) external onlyOwner {
         require(to != address(0), "Invalid recipient");
         uint256 balance = paymentToken.balanceOf(address(this));
-        paymentToken.safeTransfer(to, balance);
+    paymentToken.safeTransfer(to, balance);
         emit FeesWithdrawn(to, balance);
     }
 }

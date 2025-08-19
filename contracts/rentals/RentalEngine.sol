@@ -58,8 +58,8 @@ contract RentalEngine is Ownable, ERC721Holder, ReentrancyGuard {
         require(!leases[tokenId].active, "Lease already active");
         require(duration > 0 && duration <= maxRentalPeriod, "Invalid duration");
 
-        // Pull NFT into custody
-        nft.transferFrom(lessor, address(this), tokenId);
+        // Pull NFT into custody using safe transfer
+        nft.safeTransferFrom(lessor, address(this), tokenId);
 
         leases[tokenId] = Lease({
             lessor: lessor,
@@ -78,7 +78,7 @@ contract RentalEngine is Ownable, ERC721Holder, ReentrancyGuard {
         require(msg.sender == lease.lessee, "Only lessee can return");
 
         delete leases[tokenId];
-        nft.transferFrom(address(this), lease.lessor, tokenId);
+        nft.safeTransferFrom(address(this), lease.lessor, tokenId);
 
         emit LeaseEnded(tokenId, msg.sender);
     }
@@ -90,7 +90,7 @@ contract RentalEngine is Ownable, ERC721Holder, ReentrancyGuard {
         require(block.timestamp > lease.expiresAt, "Lease not expired");
 
         delete leases[tokenId];
-        nft.transferFrom(address(this), lease.lessor, tokenId);
+        nft.safeTransferFrom(address(this), lease.lessor, tokenId);
 
         emit LeaseDefaulted(tokenId);
     }
@@ -101,7 +101,7 @@ contract RentalEngine is Ownable, ERC721Holder, ReentrancyGuard {
         require(lease.active, "Not leased");
         
         delete leases[tokenId];
-        nft.transferFrom(address(this), lease.lessor, tokenId);
+        nft.safeTransferFrom(address(this), lease.lessor, tokenId);
         
         emit LeaseEnded(tokenId, lease.lessee);
     }
@@ -126,7 +126,7 @@ contract RentalEngine is Ownable, ERC721Holder, ReentrancyGuard {
         }
         
         delete leases[tokenId];
-        nft.transferFrom(address(this), lease.lessor, tokenId);
+        nft.safeTransferFrom(address(this), lease.lessor, tokenId);
         emit LeaseEnded(tokenId, lease.lessee);
     }
 

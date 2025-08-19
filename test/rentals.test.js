@@ -13,7 +13,7 @@ describe("RentalsModule", function () {
 
     // Deploy MFHToken for minting payments
     const MFHToken = await ethers.getContractFactory("MFHToken");
-    const mfh = await MFHToken.deploy();
+    const mfh = await MFHToken.deploy(ethers.ZeroAddress);  // Use zero address as trusted forwarder for testing
     await mfh.waitForDeployment();
 
     // Deploy NFTMinting

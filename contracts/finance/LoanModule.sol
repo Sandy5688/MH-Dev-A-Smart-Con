@@ -89,10 +89,10 @@ contract LoanModule is Ownable, ReentrancyGuard {
             active: true
         });
 
-        installments[tokenId] = InstallmentLogic.createPlan(amount, maxInstallments);
+    installments[tokenId] = InstallmentLogic.createPlan(amount, maxInstallments);
 
-        // Transfer loan amount to borrower
-        token.safeTransfer(msg.sender, amount);
+    // Transfer loan amount to borrower (ensure contract has been funded by admin beforehand)
+    token.safeTransfer(msg.sender, amount);
 
         emit LoanRequested(tokenId, msg.sender, amount);
     }
@@ -113,7 +113,7 @@ contract LoanModule is Ownable, ReentrancyGuard {
 
         // Update installment plan
         InstallmentLogic.InstallmentPlan storage plan = installments[tokenId];
-        (uint256 newRemaining, bool isLate) = InstallmentLogic.payInstallment(plan, amount, block.timestamp);
+        (, bool isLate) = InstallmentLogic.payInstallment(plan, amount, block.timestamp);
         
         loan.paid += amount;
 

@@ -27,6 +27,9 @@ contract BiddingSystem is Ownable, ReentrancyGuard {
     // tokenId => list of bids
     mapping(uint256 => Bid[]) private _bids;
 
+    // tokenId => bidder => refundable amount (withdraw pattern)
+    mapping(uint256 => mapping(address => uint256)) private _refunds;
+
     // tokenId => auto accept price
     mapping(uint256 => uint256) public autoAcceptPrice;
 
@@ -80,8 +83,8 @@ contract BiddingSystem is Ownable, ReentrancyGuard {
         for (uint256 i = 0; i < list.length; i++) {
             if (list[i].bidder == msg.sender) {
                 uint256 refund = list[i].amount;
-                paymentToken.safeTransfer(msg.sender, refund);
-
+                // Use withdraw pattern: credit refund so heavy loops are avoided in accept
+                _refunds[tokenId][msg.sender] += refund;
                 emit BidRejected(tokenId, msg.sender, refund);
 
                 list[i] = list[list.length - 1];
@@ -107,13 +110,29 @@ contract BiddingSystem is Ownable, ReentrancyGuard {
     // Lock NFT into escrow (seller must have approved escrow beforehand)
     escrow.lockAsset(tokenId, seller);
 
-        // Pay seller immediately
+        // Move other bidders' funds to refunds mapping so they can withdraw later
+        for (uint256 i = 0; i < _bids[tokenId].length; i++) {
+            if (i == index) continue;
+            Bid memory b = _bids[tokenId][i];
+            _refunds[tokenId][b.bidder] += b.amount;
+        }
+
+        // Pay seller immediately from accepted.bid amount
         paymentToken.safeTransfer(seller, accepted.amount);
 
         // Clear bids for tokenId
         delete _bids[tokenId];
 
         emit BidAccepted(tokenId, accepted.bidder, accepted.amount);
+    }
+
+    /// @notice Withdraw refund for a bidder on a specific tokenId
+    function withdrawBidRefund(uint256 tokenId) external nonReentrant {
+        uint256 amount = _refunds[tokenId][msg.sender];
+        require(amount > 0, "No refund");
+        _refunds[tokenId][msg.sender] = 0;
+        paymentToken.safeTransfer(msg.sender, amount);
+        emit BidRejected(tokenId, msg.sender, amount);
     }
 
     /* ----------------- View ----------------- */

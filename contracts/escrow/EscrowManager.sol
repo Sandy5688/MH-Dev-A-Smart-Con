@@ -95,6 +95,14 @@ contract EscrowManager is Ownable, IERC721Receiver {
     }
 
     /**
+     * @notice Return escrow info for a tokenId
+     */
+    function getEscrow(uint256 tokenId) external view returns (address depositor, uint256 id, bool locked) {
+        Escrow memory e = escrows[tokenId];
+        return (e.depositor, e.tokenId, e.locked);
+    }
+
+    /**
      * @notice ERC721 receiver handler so safeTransferFrom to this contract succeeds.
      */
     function onERC721Received(

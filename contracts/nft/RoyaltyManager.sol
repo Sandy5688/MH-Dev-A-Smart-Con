@@ -58,7 +58,9 @@ contract RoyaltyManager is Ownable, IRoyaltyManager {
         uint256 platformAmount = (totalRoyalty * platformCut) / 10000;
         uint256 creatorAmount = totalRoyalty - platformAmount;
 
-        // Pull funds once from marketplace/caller to each recipient
+        // Caller (marketplace) should have already transferred salePrice into the marketplace contract.
+        // RoyaltyManager will pull funds from caller (marketplace) but to keep things simple and safe,
+        // expect marketplace to approve this contract and transfer from marketplace address.
         if (creatorAmount > 0) {
             paymentToken.safeTransferFrom(msg.sender, r.creator, creatorAmount);
         }
