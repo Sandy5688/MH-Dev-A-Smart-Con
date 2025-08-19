@@ -1,4 +1,4 @@
-// scripts/deploy-A.js
+// deploy/deploy-A.js
 const { deployments, getNamedAccounts, ethers } = require("hardhat");
 
 async function main() {

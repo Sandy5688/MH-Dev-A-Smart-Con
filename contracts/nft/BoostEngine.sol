@@ -3,28 +3,38 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
-contract BoostEngine is Ownable {
+contract BoostEngine is Ownable, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     IERC20 public paymentToken;
     address public treasury;
 
-    uint256 public boostRatePerDay = 5 * 10 ** 18;
+    // Fee per day in payment token units (decimals as per token)
+    uint256 public boostFeePerDay = 5 * 10**18;
 
     mapping(uint256 => uint256) public boostedUntil;
 
-    event NFTBoosted(uint256 tokenId, address user, uint256 duration);
+    event NFTBoosted(uint256 indexed tokenId, address indexed user, uint256 daysCount, uint256 boostedUntil);
 
     constructor(address _token, address _treasury) {
+        require(_token != address(0), "Invalid payment token");
+        require(_treasury != address(0), "Invalid treasury");
         paymentToken = IERC20(_token);
         treasury = _treasury;
     }
 
-    function boostNFT(uint256 tokenId, uint256 daysCount) external {
+    /// @notice Boost NFT for a number of days
+    function boostNFT(uint256 tokenId, uint256 daysCount) external nonReentrant {
         require(daysCount > 0, "Invalid boost period");
-        uint256 fee = daysCount * boostRatePerDay;
+        require(treasury != address(0), "Treasury not set");
 
-        // Transfer boost fee to treasury
-        IERC20(paymentToken).transferFrom(msg.sender, treasury, fee);
+        uint256 fee = daysCount * boostFeePerDay;
+
+        // Transfer fee safely to treasury
+        paymentToken.safeTransferFrom(msg.sender, treasury, fee);
 
         uint256 currentEnd = boostedUntil[tokenId];
         uint256 newEnd = block.timestamp + (daysCount * 1 days);
@@ -36,11 +46,11 @@ contract BoostEngine is Ownable {
             boostedUntil[tokenId] = newEnd;
         }
 
-        emit NFTBoosted(tokenId, msg.sender, daysCount);
+        emit NFTBoosted(tokenId, msg.sender, daysCount, boostedUntil[tokenId]);
     }
 
-    function setBoostRate(uint256 newRate) external onlyOwner {
-        boostRatePerDay = newRate;
+    function setBoostFeePerDay(uint256 newFee) external onlyOwner {
+        boostFeePerDay = newFee;
     }
 
     function setPaymentToken(address _token) external onlyOwner {
@@ -49,7 +59,6 @@ contract BoostEngine is Ownable {
     }
 
     function setTreasury(address _treasury) external onlyOwner {
-        require(_treasury != address(0), "Invalid treasury");
         treasury = _treasury;
     }
 
