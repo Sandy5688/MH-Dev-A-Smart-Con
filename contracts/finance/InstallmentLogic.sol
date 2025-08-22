@@ -11,6 +11,8 @@ library InstallmentLogic {
         uint256 deadline;
     }
 
+    event InstallmentPaid(uint256 amount, uint256 remaining, bool late);
+
     function createPlan(uint256 totalAmount, uint8 count) internal view returns (InstallmentPlan memory) {
         require(count > 0, "Invalid count");
         return InstallmentPlan({
@@ -41,6 +43,4 @@ library InstallmentLogic {
         remaining = plan.total - plan.paid;
         defaulted = nowTime > plan.deadline && remaining > 0;
     }
-
-    event InstallmentPaid(uint256 amount, uint256 remaining, bool late);
 }
