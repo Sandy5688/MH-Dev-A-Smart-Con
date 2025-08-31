@@ -1,14 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "../interfaces/IInstallmentLogic.sol";
+import "./IInstallmentLogic.sol";
 
-/**
- * @title InstallmentLogic
- * @dev Handles installment-based payments for BNPL and subscription features.
- */
-contract InstallmentLogic is Ownable, IInstallmentLogic {
+contract InstallmentLogic is IInstallmentLogic {
     struct InstallmentPlan {
         uint256 totalAmount;
         uint256 paidAmount;
@@ -19,10 +14,10 @@ contract InstallmentLogic is Ownable, IInstallmentLogic {
         bool active;
     }
 
-    uint256 public planCounter;
-    mapping(uint256 => InstallmentPlan) public plans;
+    uint256 private nextPlanId;
+    mapping(uint256 => InstallmentPlan) private plans;
 
-    event InstallmentCreated(
+    event InstallmentPlanCreated(
         uint256 indexed planId,
         address indexed payer,
         address indexed payee,
@@ -32,26 +27,36 @@ contract InstallmentLogic is Ownable, IInstallmentLogic {
 
     event InstallmentPaid(
         uint256 indexed planId,
+        address indexed payer,
         uint256 amount,
         uint256 installmentsPaid
     );
 
-    event InstallmentCompleted(uint256 indexed planId);
+    event InstallmentPlanCompleted(
+        uint256 indexed planId,
+        address indexed payer,
+        address indexed payee
+    );
 
-    /**
-     * @notice Create a new installment plan
-     */
+    constructor() {
+        nextPlanId = 1;
+    }
+
+    /// @notice Create a new installment plan
     function createInstallmentPlan(
         address _payer,
         address _payee,
         uint256 _totalAmount,
         uint256 _installmentCount
-    ) external override onlyOwner returns (uint256) {
-        require(_installmentCount > 0, "Invalid installments");
-        require(_totalAmount > 0, "Invalid amount");
+    ) external override returns (uint256) {
+        require(_payer != address(0), "Invalid payer");
+        require(_payee != address(0), "Invalid payee");
+        require(_payer != _payee, "Payer and payee cannot be same");
+        require(_totalAmount > 0, "Amount must be > 0");
+        require(_installmentCount > 0, "Installment count must be > 0");
 
-        planCounter++;
-        plans[planCounter] = InstallmentPlan({
+        uint256 planId = nextPlanId++;
+        plans[planId] = InstallmentPlan({
             totalAmount: _totalAmount,
             paidAmount: 0,
             installmentCount: _installmentCount,
@@ -61,47 +66,62 @@ contract InstallmentLogic is Ownable, IInstallmentLogic {
             active: true
         });
 
-        emit InstallmentCreated(
-            planCounter,
+        emit InstallmentPlanCreated(
+            planId,
             _payer,
             _payee,
             _totalAmount,
             _installmentCount
         );
 
-        return planCounter;
+        return planId;
     }
 
-    /**
-     * @notice Pay an installment
-     */
+    /// @notice Pay an installment for an existing plan
     function payInstallment(uint256 _planId, uint256 _amount) external override {
         InstallmentPlan storage plan = plans[_planId];
         require(plan.active, "Plan not active");
-        require(msg.sender == plan.payer, "Not authorized");
-        require(
-            plan.installmentsPaid < plan.installmentCount,
-            "All installments paid"
-        );
-        require(_amount > 0, "Invalid amount");
+        require(msg.sender == plan.payer, "Only payer can pay");
+        require(_amount > 0, "Amount must be > 0");
+        require(plan.paidAmount + _amount <= plan.totalAmount, "Overpayment not allowed");
 
         plan.paidAmount += _amount;
-        plan.installmentsPaid++;
+        plan.installmentsPaid += 1;
 
-        emit InstallmentPaid(_planId, _amount, plan.installmentsPaid);
+        emit InstallmentPaid(_planId, msg.sender, _amount, plan.installmentsPaid);
 
-        if (plan.installmentsPaid >= plan.installmentCount) {
+        if (plan.paidAmount >= plan.totalAmount) {
             plan.active = false;
-            emit InstallmentCompleted(_planId);
+            emit InstallmentPlanCompleted(_planId, plan.payer, plan.payee);
         }
     }
 
-    /**
-     * @notice Get details of an installment plan
-     */
+    /// @notice Get details of an installment plan
     function getInstallmentPlan(
         uint256 _planId
-    ) external view override returns (InstallmentPlan memory) {
-        return plans[_planId];
+    )
+        external
+        view
+        override
+        returns (
+            uint256 totalAmount,
+            uint256 paidAmount,
+            uint256 installmentCount,
+            uint256 installmentsPaid,
+            address payer,
+            address payee,
+            bool active
+        )
+    {
+        InstallmentPlan memory plan = plans[_planId];
+        return (
+            plan.totalAmount,
+            plan.paidAmount,
+            plan.installmentCount,
+            plan.installmentsPaid,
+            plan.payer,
+            plan.payee,
+            plan.active
+        );
     }
 }
